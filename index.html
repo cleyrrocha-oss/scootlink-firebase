@@ -1101,8 +1101,7 @@ function registrarAlertaVelocidade(vel){
   if(badge) badge.textContent = alertasHoje;
 }
 
-// ── SPLASH ──
-setTimeout(()=>document.getElementById('splash').classList.add('out'), 2500);
+// ── SPLASH gerenciado no window.load ──
 
 // ── NAVEGAÇÃO ──
 // Mapa: tela → índice do botão na nav bar (0=Início,1=Histórico,2=Alertas,3=Eventos)
@@ -1205,6 +1204,73 @@ let alertasHoje = 0, tempoInicio = null;
 let ultimaGravacao = 0;
 const INTERVALO_GRAVACAO = 10000; // 10 segundos
 
+// ── PERSISTÊNCIA DE SESSÃO ──
+const SESSAO_KEY = 'scootlink_sessao';
+
+function salvarSessao(){
+  const hoje = new Date().toLocaleDateString('pt-BR');
+  const sessao = {
+    data: hoje,
+    distTotal: distTotal,
+    velMaxSessao: velMaxSessao,
+    alertasHoje: alertasHoje,
+    tempoInicio: tempoInicio,
+    ultimaAtualizacao: Date.now()
+  };
+  localStorage.setItem(SESSAO_KEY, JSON.stringify(sessao));
+}
+
+function restaurarSessao(){
+  try {
+    const raw = localStorage.getItem(SESSAO_KEY);
+    if(!raw) return false;
+    const sessao = JSON.parse(raw);
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    // Só restaura se for do mesmo dia
+    if(sessao.data !== hoje) {
+      localStorage.removeItem(SESSAO_KEY);
+      return false;
+    }
+    // Verifica se a última atualização foi há menos de 2 horas
+    if(Date.now() - sessao.ultimaAtualizacao > 7200000){
+      localStorage.removeItem(SESSAO_KEY);
+      return false;
+    }
+    // Restaura variáveis
+    distTotal    = sessao.distTotal    || 0;
+    velMaxSessao = sessao.velMaxSessao || 0;
+    alertasHoje  = sessao.alertasHoje  || 0;
+    tempoInicio  = sessao.tempoInicio  || Date.now();
+    // Restaura UI
+    const distEl = document.getElementById('stDist');
+    if(distEl) distEl.textContent = distTotal < 1000
+      ? Math.round(distTotal)+'m'
+      : (distTotal/1000).toFixed(1)+'km';
+    const alertEl = document.getElementById('stAlertas');
+    if(alertEl) alertEl.textContent = alertasHoje;
+    const min = Math.round((Date.now() - tempoInicio) / 60000);
+    const tempoEl = document.getElementById('stTempo');
+    if(tempoEl) tempoEl.textContent = min < 1 ? '<1min' : min+'min';
+    console.log(`✅ Sessão restaurada: ${(distTotal/1000).toFixed(1)}km · ${alertasHoje} alertas`);
+    return true;
+  } catch(e){
+    console.warn('Erro ao restaurar sessão:', e);
+    return false;
+  }
+}
+
+// Salva sessão a cada leitura GPS e ao sair
+function salvarSessaoAuto(){
+  salvarSessao();
+}
+
+// Salva ao fechar/minimizar
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden') salvarSessao();
+});
+window.addEventListener('pagehide', salvarSessao);
+window.addEventListener('beforeunload', salvarSessao);
+
 function iniciarGPS(){
   if(!navigator.geolocation){ gpsErro('GPS não suportado'); return; }
   document.getElementById('gpsTxt').textContent = 'Conectando ao GPS...';
@@ -1277,6 +1343,9 @@ function onPosicao(pos){
         plataforma: isIOS ? 'ios' : 'android'
       });
     }
+
+    // ── SALVA SESSÃO LOCAL ──
+    salvarSessaoAuto();
   }
 
   ultimaPos = pos.coords;
@@ -1381,7 +1450,18 @@ function simV(alvo){
 }
 
 window.addEventListener('load', ()=>{
-  setTimeout(()=>{ iniciarGPS(); iniciarMapa(); }, 2800);
+  // Restaura sessão do mesmo dia se existir
+  const sessaoRestaurada = restaurarSessao();
+  if(sessaoRestaurada){
+    // Vai direto para o Dashboard sem mostrar splash
+    setTimeout(()=>{
+      document.getElementById('splash').classList.add('out');
+      go('t-dash');
+    }, 1000);
+  } else {
+    setTimeout(()=>{ document.getElementById('splash').classList.add('out'); }, 2500);
+  }
+  setTimeout(()=>{ iniciarGPS(); iniciarMapa(); }, 1200);
 });
 
 // ── MAPA COM ROTA ──
