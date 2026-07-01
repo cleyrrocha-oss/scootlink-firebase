@@ -1264,9 +1264,16 @@ function salvarSessaoAuto(){
   salvarSessao();
 }
 
-// Salva ao fechar/minimizar
+// Salva ao fechar/minimizar e reseta tempo ao voltar
 document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState === 'hidden') salvarSessao();
+  if(document.visibilityState === 'hidden'){
+    salvarSessao();
+  } else {
+    // App voltou ao foco — reseta ultimoTempo para evitar Δt longo
+    // A distância será acumulada via GPS nativo ou próxima leitura normal
+    ultimoTempo = null;
+    console.log('App retomado — ultimoTempo resetado');
+  }
 });
 window.addEventListener('pagehide', salvarSessao);
 window.addEventListener('beforeunload', salvarSessao);
@@ -1308,11 +1315,37 @@ function onPosicao(pos){
       pos.coords.latitude, pos.coords.longitude
     );
 
-    // Filtra saltos falsos: ignora se precisão > 60m OU deslocamento improvável (>500m em <30s)
     const precisaoOk = (pos.coords.accuracy || 999) < 60;
     const dsRazoavel = dt > 0 && ds / dt < 55; // max ~200km/h em m/s
-    
-    if(precisaoOk && dsRazoavel){
+
+    // ── DETECÇÃO DE PAUSA (app em segundo plano) ──
+    // Se dt > 90s, o app ficou congelado — usamos velocidade do GPS nativo se disponível
+    // e acumulamos a distância mas não calculamos velocidade pelo Δt longo
+    const pausaLonga = dt > 90;
+
+    if(pausaLonga){
+      // Acumula distância normalmente (quilometragem continua correta)
+      if(precisaoOk && ds < 5000){ // descarta saltos > 5km (GPS drift)
+        distTotal += ds;
+        document.getElementById('stDist').textContent = distTotal < 1000
+          ? Math.round(distTotal) + 'm'
+          : (distTotal/1000).toFixed(1) + 'km';
+      }
+      // Usa velocidade nativa do GPS se disponível (muito mais confiável após pausa)
+      if(pos.coords.speed !== null && pos.coords.speed >= 0){
+        const velNativa = pos.coords.speed * 3.6; // m/s → km/h
+        if(velNativa > velMaxSessao) velMaxSessao = velNativa;
+        atualizaVel(Math.min(velNativa, 120));
+        document.getElementById('iaStatus').textContent =
+          `Retomado · GPS nativo · ${velNativa.toFixed(1)}km/h`;
+      } else {
+        document.getElementById('iaStatus').textContent =
+          `Retomado após ${Math.round(dt/60)}min · aguardando leitura...`;
+        // Zera velocidade mostrada — não sabemos a velocidade atual
+        atualizaVel(0);
+      }
+    } else if(precisaoOk && dsRazoavel){
+      // ── CÁLCULO NORMAL Δs/Δt ──
       const velCalc = (ds / dt) * 3.6;
       distTotal += ds;
       if(velCalc > velMaxSessao) velMaxSessao = velCalc;
@@ -1323,7 +1356,6 @@ function onPosicao(pos){
       document.getElementById('iaStatus').textContent =
         `Δs=${Math.round(ds)}m · Δt=${dt.toFixed(1)}s · ${velCalc.toFixed(1)}km/h`;
     } else {
-      // Ponto descartado — atualiza apenas o status
       document.getElementById('iaStatus').textContent =
         `Ponto filtrado · precisão ±${Math.round(pos.coords.accuracy)}m · aguardando...`;
     }
@@ -1340,6 +1372,7 @@ function onPosicao(pos){
         velocidadeMax: Math.round(velMaxSessao),
         distanciaTotal: Math.round(distTotal),
         alerta: velAtualNum > 32,
+        pausaDetectada: pausaLonga,
         plataforma: isIOS ? 'ios' : 'android'
       });
     }
